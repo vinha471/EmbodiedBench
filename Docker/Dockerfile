@@ -1,12 +1,34 @@
 ARG CUDA_VERSION
 ARG NVIDIA_VERSION
 
-FROM nvidia/cuda:$CUDA_VERSION-devel-ubuntu18.04
+FROM nvidia/cuda:$CUDA_VERSION-devel-ubuntu22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends python3-pip libvulkan1 python3-venv vim pciutils wget git kmod vim bzip2 build-essential libffi-dev python3-dev libgtk2.0-dev
-
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pip \
+    python3-venv \
+    vim \
+    pciutils \
+    wget \
+    git \
+    git-lfs \
+    kmod \
+    bzip2 \
+    curl \
+    build-essential \
+    libffi-dev \
+    python3-dev \
+    libgtk2.0-dev \
+    libvulkan1 \
+    libegl1 \
+    libgl1-mesa-glx \
+    libgl1-mesa-dev \
+    xorg \
+    xserver-xorg-core \
+    xserver-xorg-video-dummy \
+    x11-xserver-utils \
+    && rm -rf /var/lib/apt/lists/*
 
 ENV CONDA_DIR=/opt/conda
 RUN wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh && \
@@ -17,7 +39,7 @@ ENV PATH=${CONDA_DIR}/bin:$PATH
 
 # RUN git clone https://github.com/EmbodiedBench/EmbodiedBench.git /opt/embodiedbench
 # syntax=docker/dockerfile:1.2
-ARG GITHUB_USERNAME=jeremy-chy
+ARG GITHUB_USERNAME=vinha471
 RUN --mount=type=secret,id=github_token \
     git clone https://${GITHUB_USERNAME}:$(cat /run/secrets/github_token)@github.com/EmbodiedBench/EmbodiedBench.git /opt/embodiedbench
 
