@@ -33,6 +33,7 @@ class VLMPlanner():
         self.multistep = multistep
         self.planner_steps = 0
         self.output_json_error = 0
+        self.episode_total_tokens = 0
         self.language_only = language_only
     
     def set_actions(self, actions):
@@ -139,6 +140,7 @@ class VLMPlanner():
         self.episode_act_feedback = []
         self.planner_steps = 0
         self.output_json_error = 0
+        self.episode_total_tokens = 0
 
     def language_to_action(self, output_text):
         pattern = r'\*\*\d+\*\*'
@@ -183,6 +185,9 @@ class VLMPlanner():
     def act_custom(self, prompt, obs):
         assert type(obs) == str # input image path
         out = self.model.respond(prompt, obs)
+        last_total_tokens = getattr(self.model, "last_total_tokens", None)
+        if isinstance(last_total_tokens, (int, float)):
+            self.episode_total_tokens += int(last_total_tokens)
         # fix common generated json errors
         out = fix_json(out)
         logger.debug(f"Model Output:\n{out}\n")
@@ -239,6 +244,10 @@ class VLMPlanner():
                     time.sleep(20)
                 out = self.model.respond(self.episode_messages)
         logger.debug(f"Model Output:\n{out}\n")
+
+        last_total_tokens = getattr(self.model, "last_total_tokens", None)
+        if isinstance(last_total_tokens, (int, float)):
+            self.episode_total_tokens += int(last_total_tokens)
 
         if self.chat_history:
             self.episode_messages.append(

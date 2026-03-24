@@ -31,6 +31,7 @@ class RemoteModel:
         self.language_only = language_only
         self.task_type = task_type
         self.schema_enabled_mask = schema_enabled_mask
+        self.last_total_tokens = None
 
         if self.model_type == 'local':
             backend_config = PytorchEngineConfig(session_len=12000, dtype='float16', tp=tp)
@@ -73,6 +74,7 @@ class RemoteModel:
 
 
     def respond(self, message_history: list):
+        self.last_total_tokens = None
         if self.model_type == 'local':
             return self._call_local(message_history)
         else:
@@ -186,6 +188,8 @@ class RemoteModel:
             temperature=temperature,
             max_tokens=max_completion_tokens
         )
+        usage = getattr(response, "usage", None)
+        self.last_total_tokens = getattr(usage, "total_tokens", None)
         out = response.choices[0].message.content
 
         return out

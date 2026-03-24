@@ -40,6 +40,7 @@ class ManipPlanner():
 
         self.planner_steps = 0
         self.output_json_error = 0
+        self.episode_total_tokens = 0
         self.language_only = language_only
         self.multi_view = multiview
         self.multi_step_image = multistep
@@ -354,10 +355,14 @@ class ManipPlanner():
         self.episode_act_feedback = []
         self.planner_steps = 0
         self.output_json_error = 0
+        self.episode_total_tokens = 0
 
     def act_custom(self, prompt, obs):
         assert type(obs) == str # input image path
         out = self.model.respond(prompt, obs)
+        last_total_tokens = getattr(self.model, "last_total_tokens", None)
+        if isinstance(last_total_tokens, (int, float)):
+            self.episode_total_tokens += int(last_total_tokens)
         out = out.replace("'",'"')
         out = out.replace('\"s ', "\'s ")
         out = out.replace('```json', '').replace('```', '')
@@ -421,6 +426,10 @@ class ManipPlanner():
                 else:
                     time.sleep(20)
                 out = self.model.respond(self.episode_messages)
+
+        last_total_tokens = getattr(self.model, "last_total_tokens", None)
+        if isinstance(last_total_tokens, (int, float)):
+            self.episode_total_tokens += int(last_total_tokens)
 
         if self.chat_history:
             self.episode_messages.append(

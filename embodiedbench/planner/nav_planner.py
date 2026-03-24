@@ -32,6 +32,7 @@ class EBNavigationPlanner():
         self.set_actions(actions)
         self.planner_steps = 0
         self.output_json_error = 0
+        self.episode_total_tokens = 0
 
         self.kwargs = kwargs
         self.action_key = kwargs.pop('action_key', 'action_id')
@@ -102,7 +103,6 @@ You are supposed to output in JSON.{template_lang if self.language_only else tem
             prompt += f'\n\n## Now the human instruction is: {user_instruction}.'
 
             prompt += self.first_prompt
-     
         elif self.chat_history:
 
             # This is to support the sliding window feature
@@ -221,6 +221,7 @@ You are supposed to output in JSON.{template_lang if self.language_only else tem
         self.episode_act_feedback = []
         self.planner_steps = 0
         self.output_json_error = 0
+        self.episode_total_tokens = 0
 
     def language_to_action(self, output_text):
         pattern = r'\*\*\d+\*\*'
@@ -258,6 +259,9 @@ You are supposed to output in JSON.{template_lang if self.language_only else tem
     def act_custom(self, prompt, obs):
         assert type(obs) == str # input image path
         out = self.model.respond(prompt, obs)
+        last_total_tokens = getattr(self.model, "last_total_tokens", None)
+        if isinstance(last_total_tokens, (int, float)):
+            self.episode_total_tokens += int(last_total_tokens)
         out = out.replace("'",'"')
         out = out.replace('\"s ', "\'s ")
         out = out.replace('```json', '').replace('```', '')
@@ -308,6 +312,10 @@ You are supposed to output in JSON.{template_lang if self.language_only else tem
             if 'qwen' in self.model_name:
                 return -2,'''{"visual_state_description":"qwen model generate empty action due to inappropriate content check", "reasoning_and_reflection":"invalid json, random action",
                    "language_plan":"invalid json, random action"}'''
+
+        last_total_tokens = getattr(self.model, "last_total_tokens", None)
+        if isinstance(last_total_tokens, (int, float)):
+            self.episode_total_tokens += int(last_total_tokens)
 
         if self.chat_history:
             self.episode_messages.append(

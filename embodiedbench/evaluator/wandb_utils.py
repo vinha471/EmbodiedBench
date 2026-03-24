@@ -7,7 +7,7 @@ def _is_numeric(value):
     return isinstance(value, numbers.Real) and not isinstance(value, bool)
 
 
-def maybe_init_wandb(config, model_name, env_name, eval_set):
+def init_wandb(config, model_name, env_name, eval_set):
     wandb_entity = config.get("wandb_entity")
     if wandb_entity is None or wandb_entity == "":
         return None
@@ -60,6 +60,22 @@ def log_episode_metrics(wandb, step, episode_info, running_metrics=None):
 
     if payload:
         wandb.log(payload, step=int(step))
+
+
+def log_call_metrics(wandb, step, total_tokens, episode_idx=None, planner_step=None):
+    if wandb is None:
+        return
+
+    if not _is_numeric(total_tokens):
+        return
+
+    payload = {"call/total_tokens": total_tokens}
+    if episode_idx is not None and _is_numeric(episode_idx):
+        payload["call/episode_idx"] = episode_idx
+    if planner_step is not None and _is_numeric(planner_step):
+        payload["call/planner_step"] = planner_step
+
+    wandb.log(payload, step=int(step))
 
 
 def log_summary_metrics(wandb, results_dir, summary_file_candidates=("summary.json", "summary_all.json")):

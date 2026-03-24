@@ -14,7 +14,7 @@ from time import sleep
 from embodiedbench.evaluator.config.system_prompts import eb_navigation_system_prompt
 from embodiedbench.evaluator.config.eb_navigation_example import examples
 from embodiedbench.main import logger
-from embodiedbench.evaluator.wandb_utils import maybe_init_wandb, log_episode_metrics, log_summary_metrics, finish_wandb
+from embodiedbench.evaluator.wandb_utils import maybe_init_wandb, log_episode_metrics, log_call_metrics, log_summary_metrics, finish_wandb
 
 system_prompt = eb_navigation_system_prompt
 examples = examples
@@ -66,7 +66,7 @@ class EB_NavigationEvaluator():
                                                multiview=self.config['multiview'], multistep=self.config['multistep'],
                                                visual_icl=self.config['visual_icl'], truncate=self.config.get('truncate', False))
 
-            self.wandb = maybe_init_wandb(self.config, self.model_name, "eb_nav", self.eval_set)
+            self.wandb = init_wandb(self.config, self.model_name, "eb_nav", self.eval_set)
             try:
                 self.evaluate()
                 average_json_values(os.path.join(self.env.log_path, 'results'), selected_key=None)
@@ -83,6 +83,7 @@ class EB_NavigationEvaluator():
         success_count = 0
         reward_sum = 0.0
         planner_error_sum = 0.0
+        call_log_step = 0
 
         while self.env._current_episode_num < self.env.number_of_episodes:
             logger.info(f"Evaluating episode {self.env._current_episode_num} ...")
@@ -95,7 +96,12 @@ class EB_NavigationEvaluator():
             done = False
             while not done:
                 try:
+                    tokens_before = self.planner.episode_total_tokens
                     action, reasoning = self.planner.act(img_path, user_instruction)
+                    call_log_step += 1
+                    call_total_tokens = max(0, int(self.planner.episode_total_tokens - tokens_before))
+                    call_episode_idx = self.env._current_episode_num if not len(self.env.selected_indexes) else self.env.selected_indexes[self.env._current_episode_num - 1] + 1
+                    log_call_metrics(self.wandb, call_log_step, call_total_tokens, episode_idx=call_episode_idx, planner_step=self.planner.planner_steps)
                     print(f"Planner Output Action: {action}")
                     reasoning = json.loads(reasoning)
                     if type(action) == list:
@@ -139,6 +145,7 @@ class EB_NavigationEvaluator():
             episode_info['num_steps'] = info["env_step"]
             episode_info['planner_steps'] = self.planner.planner_steps
             episode_info['planner_output_error'] = self.planner.output_json_error
+            episode_info['total_tokens'] = self.planner.episode_total_tokens
             episode_info["episode_elapsed_seconds"] = info["episode_elapsed_seconds"]
             self.save_episode_metric(episode_info)
 

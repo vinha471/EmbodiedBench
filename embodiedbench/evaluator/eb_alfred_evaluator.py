@@ -9,7 +9,7 @@ from embodiedbench.evaluator.summarize_result import average_json_values
 from embodiedbench.evaluator.evaluator_utils import load_saved_data, update_config_with_args
 from embodiedbench.evaluator.config.system_prompts import alfred_system_prompt
 from embodiedbench.main import logger
-from embodiedbench.evaluator.wandb_utils import maybe_init_wandb, log_episode_metrics, log_summary_metrics, finish_wandb
+from embodiedbench.evaluator.wandb_utils import maybe_init_wandb, log_episode_metrics, log_call_metrics, log_summary_metrics, finish_wandb
 
 example_path = os.path.join(os.path.dirname(__file__), 'config/alfred_examples.json')
 exploration_example_path = os.path.join(os.path.dirname(__file__), 'config/alfred_long_horizon_examples.json')
@@ -66,7 +66,7 @@ class EB_AlfredEvaluator():
                                       obs_key='head_rgb', chat_history=self.config['chat_history'], language_only=self.config['language_only'],
                                       use_feedback=self.config.get('env_feedback', True), multistep=self.config.get('multistep', 0), tp=self.config.get('tp', 1))
 
-            self.wandb = maybe_init_wandb(self.config, self.model_name, "eb_alf", self.eval_set)
+            self.wandb = init_wandb(self.config, self.model_name, "eb_alf", self.eval_set)
             try:
                 self.evaluate()
                 average_json_values(os.path.join(self.env.log_path, 'results'), output_file='summary.json')
@@ -85,6 +85,7 @@ class EB_AlfredEvaluator():
         invalid_actions_sum = 0.0
         empty_plan_count = 0
         planner_error_sum = 0.0
+        call_log_step = 0
 
         while self.env._current_episode_num < self.env.number_of_episodes:
             logger.info(f"Evaluating episode {self.env._current_episode_num} ...")
@@ -100,7 +101,12 @@ class EB_AlfredEvaluator():
             done = False
             while not done:
                 try:
+                    tokens_before = self.planner.episode_total_tokens
                     action, reasoning = self.planner.act(img_path, user_instruction)
+                    call_log_step += 1
+                    call_episode_idx = self.env._current_episode_num if not len(self.env.selected_indexes) else self.env.selected_indexes[self.env._current_episode_num - 1] + 1
+                    call_total_tokens = max(0, int(self.planner.episode_total_tokens - tokens_before))
+                    log_call_metrics(self.wandb, call_log_step, call_total_tokens, episode_idx=call_episode_idx, planner_step=self.planner.planner_steps)
                     print(f"Planner Output Action: {action}")
                     if action == -2:  # empty plan stop here
                         episode_info['empty_plan'] = 1
@@ -175,6 +181,7 @@ class EB_AlfredEvaluator():
             episode_info['num_steps'] = info["env_step"]
             episode_info['planner_steps'] = self.planner.planner_steps
             episode_info['planner_output_error'] = self.planner.output_json_error
+            episode_info['total_tokens'] = self.planner.episode_total_tokens
             episode_info["num_invalid_actions"] = episode_info['num_invalid_actions']
             episode_info["num_invalid_action_ratio"] = episode_info['num_invalid_actions'] / info["env_step"] if info['env_step'] > 0 else 0
             episode_info["episode_elapsed_seconds"] = info.get("episode_elapsed_seconds", time.time() - self.env._episode_start_time)

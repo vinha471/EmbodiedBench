@@ -11,7 +11,7 @@ from embodiedbench.envs.eb_manipulation.eb_man_utils import form_object_coord_fo
 from embodiedbench.planner.manip_planner import ManipPlanner
 from embodiedbench.evaluator.config.eb_manipulation_example import vlm_examples_baseline, llm_examples, vlm_examples_ablation
 from embodiedbench.main import logger
-from embodiedbench.evaluator.wandb_utils import maybe_init_wandb, log_episode_metrics, log_summary_metrics, finish_wandb
+from embodiedbench.evaluator.wandb_utils import maybe_init_wandb, log_episode_metrics, log_call_metrics, log_summary_metrics, finish_wandb
 
 
 class EB_ManipulationEvaluator():
@@ -106,6 +106,7 @@ class EB_ManipulationEvaluator():
         avg_reward_sum = 0.0
         planner_steps_sum = 0.0
         planner_error_sum = 0.0
+        call_log_step = 0
 
         while self.env._current_episode_num < self.env.number_of_episodes:
             logger.info(f"Evaluating episode {self.env._current_episode_num} ...")
@@ -135,10 +136,14 @@ class EB_ManipulationEvaluator():
             reasoning_list = []
 
             while not done:
+                tokens_before = self.planner.episode_total_tokens
                 if self.config['multistep']:
                     action, reasoning = self.planner.act(image_history, user_instruction, str(avg_obj_coord), self.env.current_task_variation)
                 else:
                     action, reasoning = self.planner.act(img_path_list, user_instruction, str(avg_obj_coord), self.env.current_task_variation)
+                call_log_step += 1
+                call_total_tokens = max(0, int(self.planner.episode_total_tokens - tokens_before))
+                log_call_metrics(self.wandb, call_log_step, call_total_tokens, episode_idx=self.env._current_episode_num, planner_step=self.planner.planner_steps)
                 print(f"Planner Output Action: {action}")
                 reasoning_list.append(reasoning)
                 if len(action) == 0:
@@ -182,6 +187,7 @@ class EB_ManipulationEvaluator():
             episode_info['num_steps'] = self.env._current_step
             episode_info['planner_steps'] = self.planner.planner_steps
             episode_info['planner_output_error'] = self.planner.output_json_error
+            episode_info['total_tokens'] = self.planner.episode_total_tokens
             episode_info["episode_elapsed_seconds"] = info["episode_elapsed_seconds"]
             self.save_episode_metric(episode_info)
             self.save_planner_outputs(reasoning_list)
@@ -247,7 +253,7 @@ class EB_ManipulationEvaluator():
                                         visual_icl=self.config["visual_icl"],
                                         tp=self.config["tp"])
 
-            self.wandb = maybe_init_wandb(self.config, self.model_name, "eb_man", self.eval_set)
+            self.wandb = init_wandb(self.config, self.model_name, "eb_man", self.eval_set)
             try:
                 self.evaluate()
                 with open(os.path.join(self.log_path, 'config.txt'), 'w') as f:
