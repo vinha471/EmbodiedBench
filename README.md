@@ -249,6 +249,15 @@ export GEMINI_API_KEY="your_gemini_api_key_here"
 export ANTHROPIC_API_KEY="your_anpic_api_key_here"
 export DASHSCOPE_API_KEY="your_dashscope_api_here" # the official qwen apis
 ```
+
+OpenRouter is also supported through the OpenAI-compatible client:
+```bash
+export OPENAI_BASE_URL="https://openrouter.ai/api/v1"
+export OPENAI_API_KEY="your_openrouter_api_key_here"
+# Example OpenRouter model slug
+python -m embodiedbench.main env=eb-nav model_name="openai/gpt-4o" exp_name="baseline_openrouter"
+```
+
 To evaluate MLLMs in EmbodiedBench, activate the corresponding Conda environment and run:
 ```bash
 conda activate embench
@@ -286,8 +295,64 @@ You can customize the evaluation using the following flags:
 - **`visual_icl`**: Enables visual in-context learning (`False` by default).  
 - **`log_level`**: Sets the logging level (`INFO` by default). Use `DEBUG` for debugging purposes.
 - **`truncate`**: **[Now only for EB-Navigation since other tasks normally don't require chat_history=True]** Enables truncation of conversation history when `chat_history=True` (`False` by default). When enabled, it automatically removes verbose content from previous conversation turns while preserving key information. Only takes effect when `chat_history=True`.
+- **`wandb_entity`**, **`wandb_project`**, **`wandb_run_name`**, **`wandb_group`**: Enable and customize Weights & Biases logging (all evaluators). `wandb_entity` is the switch that turns logging on.
 
 > ⚠️ **Important:** Avoid enabling multiple flags simultaneously from `visual_icl`, `multiview`, `multistep`, and `chat_history` to prevent excessive image inputs and conflicts.  
+
+#### WandB Logging (All Evaluators)
+
+WandB logging is available in all four evaluators (`eb-alf`, `eb-hab`, `eb-nav`, `eb-man`).
+
+To enable it from CLI overrides:
+```bash
+python -m embodiedbench.main env=eb-nav model_name=gpt-4o exp_name='baseline' \
+  wandb_entity='your_entity' wandb_project='embodiedbench-eval'
+```
+Optional overrides:
+- `wandb_run_name`
+- `wandb_group`
+
+Logged metrics include:
+- `episode/*` and `running/*` (existing evaluator metrics)
+- `summary/*` (from `summary.json` or `summary_all.json`)
+- `call/total_tokens`, `call/episode_idx`, `call/planner_step` (one log per `planner.act(...)` call)
+
+Token logging behavior:
+- `episode/total_tokens` is the per-episode accumulated token count.
+- `call/total_tokens` is the token usage for that individual planner call.
+- Token values currently come from OpenAI-compatible responses that expose `usage.total_tokens` in the GPT/Qwen OpenAI path.
+
+#### Modular Generation Schema
+
+Generation guides now use a modular schema builder:
+- `embodiedbench/planner/planner_config/modular_generation_guide.py`
+- `embodiedbench/planner/planner_config/generation_guide.py`
+- `embodiedbench/planner/planner_config/generation_guide_manip.py`
+
+Module order (navigation + manipulation):
+1. `visual_state_description`
+2. `reasoning_and_reflection`
+3. `language_plan`
+4. `executable_plan`
+
+Default masks:
+- VLM: `[True, True, True, True]`
+- LLM: `[False, True, True, True]`
+
+Rules for `enabled_mask`:
+- Must be a bool list with the correct length.
+- `executable_plan` must remain enabled.
+
+CLI override examples:
+```bash
+# VLM-style schema (all modules enabled)
+python -m embodiedbench.main env=eb-nav model_name=gpt-4o \
+  schema_enabled_mask=[true,true,true,true]
+
+# LLM-style schema (drop visual_state_description)
+python -m embodiedbench.main env=eb-nav language_only=true model_name=gpt-4o \
+  schema_enabled_mask=[false,true,true,true]
+```
 
 #### More on "truncate" for EB-Navigation
 

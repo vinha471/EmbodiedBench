@@ -59,14 +59,21 @@ class EB_NavigationEvaluator():
                                        exp_name=exp_name, multiview=self.config['multiview'], boundingbox=self.config['detection_box'],
                                        multistep=self.config['multistep'], resolution=self.config['resolution'])
 
+            schema_enabled_mask = self.config.get('schema_enabled_mask')
+            if schema_enabled_mask is None:
+                schema_enabled_mask = [False, True, True, True] if self.config['language_only'] else [True, True, True, True]
+            else:
+                schema_enabled_mask = list(schema_enabled_mask)
+
             self.planner = EBNavigationPlanner(model_name=self.model_name, model_type=self.config['model_type'],
                                                actions=self.env.language_skill_set, system_prompt=system_prompt,
                                                examples=examples, n_shot=self.config['n_shots'], obs_key='head_rgb',
                                                chat_history=self.config['chat_history'], language_only=self.config['language_only'],
                                                multiview=self.config['multiview'], multistep=self.config['multistep'],
-                                               visual_icl=self.config['visual_icl'], truncate=self.config.get('truncate', False))
+                                               visual_icl=self.config['visual_icl'], truncate=self.config.get('truncate', False),
+                                               kwargs={'schema_enabled_mask': schema_enabled_mask})
 
-            self.wandb = init_wandb(self.config, self.model_name, "eb_nav", self.eval_set)
+            self.wandb = maybe_init_wandb(self.config, self.model_name, "eb_nav", self.eval_set)
             try:
                 self.evaluate()
                 average_json_values(os.path.join(self.env.log_path, 'results'), selected_key=None)

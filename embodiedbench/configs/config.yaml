@@ -18,6 +18,7 @@ exp_name: null
 visual_icl: null
 tp: null
 log_level: null
+schema_enabled_mask: null
 wandb_entity: null
 wandb_project: null
 wandb_run_name: null

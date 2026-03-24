@@ -241,6 +241,12 @@ class EB_ManipulationEvaluator():
                 self.log_path = 'running/eb_manipulation/{}/{}/{}'.format(real_model_name, self.config["exp_name"], self.eval_set)
             self.env = EBManEnv(eval_set=self.eval_set, img_size=(self.config['resolution'], self.config['resolution']), down_sample_ratio=self.config["down_sample_ratio"], log_path=self.log_path)
             ic_examples = self.load_demonstration()
+            schema_enabled_mask = self.config.get('schema_enabled_mask')
+            if schema_enabled_mask is None:
+                schema_enabled_mask = [False, True, True, True] if self.config['language_only'] else [True, True, True, True]
+            else:
+                schema_enabled_mask = list(schema_enabled_mask)
+
             self.planner = ManipPlanner(model_name=self.model_name,
                                         model_type=self.config['model_type'],
                                         system_prompt=eb_manipulation_system_prompt,
@@ -251,9 +257,10 @@ class EB_ManipulationEvaluator():
                                         multiview=self.config["multiview"],
                                         multistep=self.config["multistep"],
                                         visual_icl=self.config["visual_icl"],
-                                        tp=self.config["tp"])
+                                        tp=self.config["tp"],
+                                        kwargs={"schema_enabled_mask": schema_enabled_mask})
 
-            self.wandb = init_wandb(self.config, self.model_name, "eb_man", self.eval_set)
+            self.wandb = maybe_init_wandb(self.config, self.model_name, "eb_man", self.eval_set)
             try:
                 self.evaluate()
                 with open(os.path.join(self.log_path, 'config.txt'), 'w') as f:

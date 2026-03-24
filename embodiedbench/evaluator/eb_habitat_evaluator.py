@@ -65,12 +65,19 @@ class EB_HabitatEvaluator():
             self.env = EBHabEnv(eval_set=self.eval_set, down_sample_ratio=self.config['down_sample_ratio'], exp_name=exp_name,
                                 start_epi_index=self.config.get('start_epi_index', 0), resolution=self.config.get('resolution', 500))
 
+            schema_enabled_mask = self.config.get('schema_enabled_mask')
+            if schema_enabled_mask is None:
+                schema_enabled_mask = [False, True, True, True] if self.config['language_only'] else [True, True, True, True]
+            else:
+                schema_enabled_mask = list(schema_enabled_mask)
+
             model_type = self.config.get('model_type', 'remote')
             self.planner = VLMPlanner(self.model_name, model_type, self.env.language_skill_set, self.system_prompt, examples, n_shot=self.config['n_shots'], obs_key='head_rgb',
                                       chat_history=self.config['chat_history'], language_only=self.config['language_only'],
-                                      use_feedback=self.config.get('env_feedback', True), multistep=self.config.get('multistep', 0), tp=self.config.get('tp', 1))
+                                      use_feedback=self.config.get('env_feedback', True), multistep=self.config.get('multistep', 0), tp=self.config.get('tp', 1),
+                                      kwargs={'schema_enabled_mask': schema_enabled_mask})
 
-            self.wandb = init_wandb(self.config, self.model_name, "eb_hab", self.eval_set)
+            self.wandb = maybe_init_wandb(self.config, self.model_name, "eb_hab", self.eval_set)
             try:
                 self.evaluate()
                 average_json_values(os.path.join(self.env.log_path, 'results'), output_file='summary.json')
