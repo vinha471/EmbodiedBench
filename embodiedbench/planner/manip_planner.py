@@ -31,15 +31,16 @@ class ManipPlanner():
         self.examples = examples
         self.n_shot = n_shot
         self.chat_history = chat_history # whether to include all the chat history for prompting
+        self.kwargs = kwargs
+        self.schema_enabled_mask = self.kwargs.pop('schema_enabled_mask', self.kwargs.pop('enabled_mask', None))
         if model_type == 'custom':
             self.model = CustomModel(model_name, language_only)
         else:
-            self.model = RemoteModel(model_name, model_type, language_only, tp=tp, task_type='manip')
+            self.model = RemoteModel(model_name, model_type, language_only, tp=tp, task_type='manip', schema_enabled_mask=self.schema_enabled_mask)
 
         self.planner_steps = 0
         self.output_json_error = 0
         self.language_only = language_only
-        self.kwargs = kwargs
         self.multi_view = multiview
         self.multi_step_image = multistep
         self.visual_icl = visual_icl

@@ -11,3 +11,7 @@ resolution: 500
 exp_name: baseline
 env_feedback: True
 tp: 1
+wandb_entity: null
+wandb_project: null
+wandb_run_name: null
+wandb_group: null

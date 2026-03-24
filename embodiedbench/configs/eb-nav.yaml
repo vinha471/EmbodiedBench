@@ -14,3 +14,7 @@ exp_name: navigation_baseline
 visual_icl: False
 tp: 1
 truncate: True
+wandb_entity: null
+wandb_project: null
+wandb_run_name: null
+wandb_group: null

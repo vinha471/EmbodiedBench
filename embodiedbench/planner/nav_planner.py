@@ -7,7 +7,6 @@ import json
 # import lmdeploy
 # from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig
 from openai import OpenAI
-from embodiedbench.planner.planner_config.generation_guide import llm_generation_guide, vlm_generation_guide
 from embodiedbench.planner.planner_utils import local_image_to_data_url, truncate_message_prompts
 # from embodiedbench.planner.eb_navigation.RemoteModel_claude import RemoteModel
 from embodiedbench.planner.remote_model import RemoteModel
@@ -36,6 +35,7 @@ class EBNavigationPlanner():
 
         self.kwargs = kwargs
         self.action_key = kwargs.pop('action_key', 'action_id')
+        self.schema_enabled_mask = kwargs.pop('schema_enabled_mask', kwargs.pop('enabled_mask', None))
 
         self.multiview = multiview
         self.multistep = multistep
@@ -73,7 +73,7 @@ You are supposed to output in JSON.{template_lang if self.language_only else tem
         if model_type == 'custom':
             self.model = CustomModel(model_name, language_only)
         else:
-            self.model = RemoteModel(model_name, model_type, language_only, tp=tp)
+            self.model = RemoteModel(model_name, model_type, language_only, tp=tp, schema_enabled_mask=self.schema_enabled_mask)
 
     
     def set_actions(self, actions):

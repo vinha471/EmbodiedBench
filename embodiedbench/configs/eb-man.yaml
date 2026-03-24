@@ -13,3 +13,7 @@ resolution: 500
 exp_name: baseline
 visual_icl: 0
 tp: 1
+wandb_entity: null
+wandb_project: null
+wandb_run_name: null
+wandb_group: null

@@ -11,6 +11,8 @@ from embodiedbench.envs.eb_manipulation.eb_man_utils import form_object_coord_fo
 from embodiedbench.planner.manip_planner import ManipPlanner
 from embodiedbench.evaluator.config.eb_manipulation_example import vlm_examples_baseline, llm_examples, vlm_examples_ablation
 from embodiedbench.main import logger
+from embodiedbench.evaluator.wandb_utils import maybe_init_wandb, log_episode_metrics, log_summary_metrics, finish_wandb
+
 
 class EB_ManipulationEvaluator():
     def __init__(self, config):
@@ -19,6 +21,7 @@ class EB_ManipulationEvaluator():
         self.config = config
         self.env = None
         self.planner = None
+        self.wandb = None
 
     def load_demonstration(self):
         all_examples = {}
@@ -50,7 +53,7 @@ class EB_ManipulationEvaluator():
             os.makedirs(res_path)
         with open(os.path.join(res_path, filename), 'w', encoding='utf-8') as f:
             json.dump(episode_info, f, ensure_ascii=False)
-    
+
     def save_planner_outputs(self, reasoning_list):
         filename = 'planner_output_episode_{}.txt'.format(self.env._current_episode_num)
         res_path = os.path.join(self.env.log_path, 'results')
@@ -59,7 +62,7 @@ class EB_ManipulationEvaluator():
         with open(os.path.join(res_path, filename), 'w', encoding='utf-8') as f:
             for s in reasoning_list:
                 f.write(s + "\n")
-    
+
     def print_task_eval_results(self, filename):
         folder_path = f"{self.log_path}/results"
         total_number_of_task = 0
@@ -70,12 +73,12 @@ class EB_ManipulationEvaluator():
         for file_name in sorted(os.listdir(folder_path)):
             if file_name.endswith(".json") and file_name.startswith("episode"):
                 file_path = os.path.join(folder_path, file_name)
-                
+
                 # Open and load the JSON file
                 with open(file_path, 'r', encoding='utf-8') as json_file:
                     data = json.load(json_file)
                     task_success = data["task_success"]
-                    if data["planner_output_error"] > 0:    
+                    if data["planner_output_error"] > 0:
                         output_format_error += 1
                     if task_success == 1:
                         success_number_of_task += 1
@@ -98,6 +101,12 @@ class EB_ManipulationEvaluator():
 
     def evaluate(self):
         progress_bar = tqdm(total=self.env.number_of_episodes, desc="Episodes")
+        episodes_done = 0
+        success_count = 0
+        avg_reward_sum = 0.0
+        planner_steps_sum = 0.0
+        planner_error_sum = 0.0
+
         while self.env._current_episode_num < self.env.number_of_episodes:
             logger.info(f"Evaluating episode {self.env._current_episode_num} ...")
             episode_info = {'reward': [], 'action_success': []}
@@ -152,7 +161,7 @@ class EB_ManipulationEvaluator():
                         episode_info['action_success'].append(info['action_success'])
                         if done:
                             break
-                
+
                 avg_obj_coord, all_avg_point_list, camera_extrinsics_list, camera_intrinsics_list = form_object_coord_for_input(copy.deepcopy(obs), self.env.task_class, camera_views)
                 if not done:
                     if not self.config['language_only']:
@@ -165,7 +174,7 @@ class EB_ManipulationEvaluator():
                             if image_history[-1].split('.png')[0] in img_path_list[0]:
                                 image_history.pop()
                                 image_history.append(img_path_list[0])
-            
+
             # evaluation metrics
             episode_info['instruction'] = user_instruction
             episode_info['avg_reward'] = np.mean(episode_info['reward'])
@@ -176,16 +185,33 @@ class EB_ManipulationEvaluator():
             episode_info["episode_elapsed_seconds"] = info["episode_elapsed_seconds"]
             self.save_episode_metric(episode_info)
             self.save_planner_outputs(reasoning_list)
+
+            episodes_done += 1
+            success_count += int(episode_info['task_success'])
+            avg_reward_sum += float(episode_info['avg_reward'])
+            planner_steps_sum += float(episode_info['planner_steps'])
+            planner_error_sum += float(episode_info['planner_output_error'])
+            running_metrics = {
+                "episodes_done": episodes_done,
+                "success_count": success_count,
+                "success_rate_running": success_count / episodes_done,
+                "mean_avg_reward_running": avg_reward_sum / episodes_done,
+                "mean_planner_steps_running": planner_steps_sum / episodes_done,
+                "mean_planner_output_error_running": planner_error_sum / episodes_done,
+            }
+            log_episode_metrics(self.wandb, self.env._current_episode_num, episode_info, running_metrics)
+
             progress_bar.update()
+
         self.print_task_eval_results(filename="summary.json")
         self.env.close()
-    
+
     def evaluate_main(self):
         valid_eval_sets = self.config.get('eval_sets', ValidEvalSets)
         valid_eval_sets = list(valid_eval_sets)
         if type(valid_eval_sets) == list and len(valid_eval_sets) == 0:
             valid_eval_sets = ValidEvalSets
-        
+
         for eval_set in valid_eval_sets:
             if self.env is not None:
                 self.env.close()
@@ -197,42 +223,50 @@ class EB_ManipulationEvaluator():
                 real_model_name = self.model_name
             if 'exp_name' not in self.config or self.config['exp_name'] is None:
                 self.log_path = 'running/eb_manipulation/{}/n_shot={}_resolution={}_detection_box={}_multiview={}_multistep={}_visual_icl={}/{}'.format(
-                                                                                                    real_model_name, 
-                                                                                                    self.config['n_shots'], 
-                                                                                                    self.config['resolution'], 
-                                                                                                    self.config['detection_box'],
-                                                                                                    self.config['multiview'],
-                                                                                                    self.config['multistep'],
-                                                                                                    self.config['visual_icl'],
-                                                                                                    self.eval_set)
+                    real_model_name,
+                    self.config['n_shots'],
+                    self.config['resolution'],
+                    self.config['detection_box'],
+                    self.config['multiview'],
+                    self.config['multistep'],
+                    self.config['visual_icl'],
+                    self.eval_set)
             else:
                 self.log_path = 'running/eb_manipulation/{}/{}/{}'.format(real_model_name, self.config["exp_name"], self.eval_set)
             self.env = EBManEnv(eval_set=self.eval_set, img_size=(self.config['resolution'], self.config['resolution']), down_sample_ratio=self.config["down_sample_ratio"], log_path=self.log_path)
             ic_examples = self.load_demonstration()
             self.planner = ManipPlanner(model_name=self.model_name,
                                         model_type=self.config['model_type'],
-                                        system_prompt=eb_manipulation_system_prompt, 
-                                        examples=ic_examples, 
-                                        n_shot=self.config["n_shots"], 
+                                        system_prompt=eb_manipulation_system_prompt,
+                                        examples=ic_examples,
+                                        n_shot=self.config["n_shots"],
                                         chat_history=self.config["chat_history"],
                                         language_only=self.config["language_only"],
                                         multiview=self.config["multiview"],
                                         multistep=self.config["multistep"],
                                         visual_icl=self.config["visual_icl"],
                                         tp=self.config["tp"])
-            self.evaluate()
-            with open(os.path.join(self.log_path, 'config.txt'), 'w') as f:
-                f.write(str(self.config))
-                
+
+            self.wandb = maybe_init_wandb(self.config, self.model_name, "eb_man", self.eval_set)
+            try:
+                self.evaluate()
+                with open(os.path.join(self.log_path, 'config.txt'), 'w') as f:
+                    f.write(str(self.config))
+                log_summary_metrics(self.wandb, os.path.join(self.log_path, 'results'))
+            finally:
+                finish_wandb(self.wandb)
+                self.wandb = None
+
     def check_config_valid(self):
         if self.config['multiview'] + self.config['multistep'] + self.config['visual_icl'] + self.config['chat_history'] > 1:
             raise ValueError("Currently, we only support one of multiview, multistep, visual_icl, chat_history feature at a time.")
-        
+
         if self.config['language_only']:
             if self.config['multiview'] or self.config['multistep']:
                 logger.warning("Language only mode should not have multiview or multistep enabled. Setting these arguments to False ...")
                 self.config['multiview'] = 0
                 self.config['multistep'] = 0
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Run evaluation with specified model name.")
@@ -250,6 +284,10 @@ if __name__ == '__main__':
     parser.add_argument('--exp_name', type=str)
     parser.add_argument('--visual_icl', type=int, default=0)
     parser.add_argument('--tp', type=int, default=1, help='number of tensor parallel splits of the model parameters')
+    parser.add_argument('--wandb_entity', type=str, help='WandB entity/account name.')
+    parser.add_argument('--wandb_project', type=str, help='WandB project name.')
+    parser.add_argument('--wandb_run_name', type=str, help='Optional WandB run name override.')
+    parser.add_argument('--wandb_group', type=str, help='Optional WandB group override.')
     args = parser.parse_args()
 
     print("\n******** Evaluating eval set: {}, model: {} ********".format(args.eval_sets, args.model_name))
@@ -268,7 +306,11 @@ if __name__ == '__main__':
         'visual_icl': args.visual_icl,
         'exp_name': args.exp_name,
         'tp': args.tp,
-        'selected_indexes': [0, 12]
+        'selected_indexes': [0, 12],
+        'wandb_entity': args.wandb_entity,
+        'wandb_project': args.wandb_project,
+        'wandb_run_name': args.wandb_run_name,
+        'wandb_group': args.wandb_group,
     }
     print("printing config ...")
     for config_key in config:

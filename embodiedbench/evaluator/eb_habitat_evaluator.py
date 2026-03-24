@@ -9,12 +9,13 @@ from embodiedbench.evaluator.summarize_result import average_json_values
 from embodiedbench.evaluator.evaluator_utils import load_saved_data, update_config_with_args
 from embodiedbench.evaluator.config.system_prompts import habitat_system_prompt
 from embodiedbench.main import logger
+from embodiedbench.evaluator.wandb_utils import maybe_init_wandb, log_episode_metrics, log_summary_metrics, finish_wandb
 
 link_path = os.path.join(os.path.dirname(__file__), '../envs/eb_habitat/data')
 try:
     os.symlink(link_path, 'data')
 except FileExistsError:
-    pass 
+    pass
 
 
 example_path = os.path.join(os.path.dirname(__file__), 'config/habitat_examples.json')
@@ -30,17 +31,17 @@ class EB_HabitatEvaluator():
         self.env = None
         self.planner = None
         self.system_prompt = system_prompt
+        self.wandb = None
 
     def check_config_valid(self):
         if self.config['multistep'] + self.config['chat_history'] > 1:
             raise ValueError("Only one of multistep, chat_history can be enabled at a time.")
-        
+
         if self.config['language_only']:
             if self.config['multistep']:
                 logger.warning("Language only mode should not have multistep enabled. Setting these arguments to False ...")
                 self.config['multistep'] = 0
-        
-        
+
     def save_episode_metric(self, episode_info):
         filename = 'episode_{}_final_res.json'.format(self.env._current_episode_num)
         res_path = os.path.join(self.env.log_path, 'results')
@@ -54,7 +55,7 @@ class EB_HabitatEvaluator():
         valid_eval_sets = list(valid_eval_sets)
         if type(valid_eval_sets) == list and len(valid_eval_sets) == 0:
             valid_eval_sets = ValidEvalSets
-            
+
         for eval_set in valid_eval_sets:
             if self.env is not None:
                 self.env.close()
@@ -62,20 +63,33 @@ class EB_HabitatEvaluator():
             logger.info(f'Current eval set: {eval_set}')
             exp_name = f"{self.model_name.split('/')[-1]}_{self.config['exp_name']}/{eval_set}" if len(self.config['exp_name']) else f"{self.model_name.split('/')[-1]}/{eval_set}"
             self.env = EBHabEnv(eval_set=self.eval_set, down_sample_ratio=self.config['down_sample_ratio'], exp_name=exp_name,
-                                             start_epi_index=self.config.get('start_epi_index', 0), resolution=self.config.get('resolution', 500))
+                                start_epi_index=self.config.get('start_epi_index', 0), resolution=self.config.get('resolution', 500))
 
             model_type = self.config.get('model_type', 'remote')
             self.planner = VLMPlanner(self.model_name, model_type, self.env.language_skill_set, self.system_prompt, examples, n_shot=self.config['n_shots'], obs_key='head_rgb',
-                                                 chat_history=self.config['chat_history'], language_only=self.config['language_only'], 
-                                                 use_feedback=self.config.get('env_feedback', True), multistep=self.config.get('multistep', 0), tp=self.config.get('tp', 1))
+                                      chat_history=self.config['chat_history'], language_only=self.config['language_only'],
+                                      use_feedback=self.config.get('env_feedback', True), multistep=self.config.get('multistep', 0), tp=self.config.get('tp', 1))
 
-            self.evaluate()
-            average_json_values(os.path.join(self.env.log_path, 'results'), output_file='summary.json')
-            with open(os.path.join(self.env.log_path, 'config.txt'), 'w') as f:
-                f.write(str(self.config))
+            self.wandb = maybe_init_wandb(self.config, self.model_name, "eb_hab", self.eval_set)
+            try:
+                self.evaluate()
+                average_json_values(os.path.join(self.env.log_path, 'results'), output_file='summary.json')
+                with open(os.path.join(self.env.log_path, 'config.txt'), 'w') as f:
+                    f.write(str(self.config))
+                log_summary_metrics(self.wandb, os.path.join(self.env.log_path, 'results'))
+            finally:
+                finish_wandb(self.wandb)
+                self.wandb = None
 
     def evaluate(self):
         progress_bar = tqdm(total=self.env.number_of_episodes, desc="Episodes")
+        episodes_done = 0
+        success_count = 0
+        reward_sum = 0.0
+        invalid_actions_sum = 0.0
+        empty_plan_count = 0
+        planner_error_sum = 0.0
+
         while self.env._current_episode_num < self.env.number_of_episodes:
             logger.info(f"Evaluating episode {self.env._current_episode_num} ...")
             episode_info = {'reward': [], 'num_invalid_actions': 0, 'empty_plan': 0}
@@ -87,11 +101,11 @@ class EB_HabitatEvaluator():
             self.planner.reset()
             done = False
             while not done:
-                try: 
+                try:
                     action, reasoning = self.planner.act(img_path, user_instruction)
                     print(f"Planner Output Action: {action}")
 
-                    if action == -2: # empty plan stop here
+                    if action == -2:  # empty plan stop here
                         episode_info['empty_plan'] = 1
                         self.env.episode_log.append({
                             'last_action_success': 0.0,
@@ -105,7 +119,7 @@ class EB_HabitatEvaluator():
                             'subgoal_reward': episode_info.get("subgoal_reward", 0),
                             'env_step': self.env._current_step,
                         }
-                        break 
+                        break
                     if action == -1:
                         self.env._cur_invalid_actions += 1
                         episode_info['reward'].append(-1)
@@ -133,7 +147,7 @@ class EB_HabitatEvaluator():
                             print(f"Executed action: {action_str}, Task success: {info['task_success']}")
                             logger.debug(f"reward: {reward}")
                             logger.debug(f"terminate: {done}\n")
-                            
+
                             self.planner.update_info(info)
                             img_path = self.env.save_image(obs)
                             episode_info['reward'].append(reward)
@@ -148,13 +162,13 @@ class EB_HabitatEvaluator():
                         print(f"Executed action: {action_str}, Task success: {info['task_success']}")
                         logger.debug(f"reward: {reward}")
                         logger.debug(f"terminate: {done}\n")
-                            
+
                         self.planner.update_info(info)
                         img_path = self.env.save_image(obs)
                         episode_info['reward'].append(reward)
                         episode_info['num_invalid_actions'] += (info['last_action_success'] == 0)
-                
-                except Exception as e: 
+
+                except Exception as e:
                     print(e)
                     time.sleep(30)
 
@@ -170,14 +184,33 @@ class EB_HabitatEvaluator():
             episode_info["num_invalid_actions"] = episode_info['num_invalid_actions']
             episode_info["num_invalid_action_ratio"] = episode_info['num_invalid_actions'] / info["env_step"] if info['env_step'] > 0 else 0
             episode_info["episode_elapsed_seconds"] = info.get("episode_elapsed_seconds", time.time() - self.env._episode_start_time)
-            
+
             self.env.save_episode_log()
             self.save_episode_metric(episode_info)
+
+            episodes_done += 1
+            success_count += int(episode_info['task_success'])
+            reward_sum += float(episode_info['reward'])
+            invalid_actions_sum += float(episode_info['num_invalid_actions'])
+            empty_plan_count += int(episode_info['empty_plan'])
+            planner_error_sum += float(episode_info['planner_output_error'])
+            running_metrics = {
+                "episodes_done": episodes_done,
+                "success_count": success_count,
+                "success_rate_running": success_count / episodes_done,
+                "mean_reward_running": reward_sum / episodes_done,
+                "mean_invalid_actions_running": invalid_actions_sum / episodes_done,
+                "empty_plan_count": empty_plan_count,
+                "mean_planner_output_error_running": planner_error_sum / episodes_done,
+            }
+            log_episode_metrics(self.wandb, self.env._current_episode_num, episode_info, running_metrics)
+
             progress_bar.update()
 
 
 if __name__ == '__main__':
     import argparse
+
     def parse_arguments():
         parser = argparse.ArgumentParser(description='Change configuration parameters.')
         parser.add_argument('--model_name', type=str, help='Name of the model.')
@@ -193,22 +226,30 @@ if __name__ == '__main__':
         parser.add_argument('--resolution', type=int, help='Resolution for processing.')
         parser.add_argument('--env_feedback', type=int, help='Set to True to enable environment feedback.')
         parser.add_argument('--tp', type=int, help='number of tensor parallel splits of the model parameters')
+        parser.add_argument('--wandb_entity', type=str, help='WandB entity/account name.')
+        parser.add_argument('--wandb_project', type=str, help='WandB project name.')
+        parser.add_argument('--wandb_run_name', type=str, help='Optional WandB run name override.')
+        parser.add_argument('--wandb_group', type=str, help='Optional WandB group override.')
         return parser.parse_args()
 
     config = {
-        'model_name': 'gpt-4o-mini',  # 'Qwen/Qwen2-VL-7B-Instruct', 
+        'model_name': 'gpt-4o-mini',  # 'Qwen/Qwen2-VL-7B-Instruct',
         'n_shots': 10,
-        'down_sample_ratio': 1.0, 
-        'model_type': 'remote', # 'local'
+        'down_sample_ratio': 1.0,
+        'model_type': 'remote',  # 'local'
         'language_only': 0,
         'exp_name': 'vlm_10shots_imgsize500',
-        'chat_history': 0,  
+        'chat_history': 0,
         'start_epi_index': 0,
-        'eval_sets': ['base', 'common_sense', 'complex_instruction', 'spatial_relationship',  'visual_appearance' , 'long_horizon'],
-        'multistep':0, 
-        'resolution': 500, 
+        'eval_sets': ['base', 'common_sense', 'complex_instruction', 'spatial_relationship', 'visual_appearance', 'long_horizon'],
+        'multistep': 0,
+        'resolution': 500,
         'env_feedback': 1,
         'tp': 1,
+        'wandb_entity': None,
+        'wandb_project': None,
+        'wandb_run_name': None,
+        'wandb_group': None,
     }
     args = parse_arguments()
     update_config_with_args(config, args)
@@ -223,5 +264,3 @@ if __name__ == '__main__':
         print(f"Error: The symbolic link {link_path} does not exist.")
     except OSError as e:
         print(f"Error: {e}")
-
-

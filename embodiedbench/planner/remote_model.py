@@ -8,8 +8,7 @@ from openai import OpenAI
 import typing_extensions as typing
 import lmdeploy
 from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig
-from embodiedbench.planner.planner_config.generation_guide import llm_generation_guide, vlm_generation_guide
-from embodiedbench.planner.planner_config.generation_guide_manip import llm_generation_guide_manip, vlm_generation_guide_manip
+from embodiedbench.planner.planner_config.modular_generation_guide import build_generation_schema
 from embodiedbench.planner.planner_utils import convert_format_2claude, convert_format_2gemini, ActionPlan_1, ActionPlan, ActionPlan_lang, \
                                              ActionPlan_1_manip, ActionPlan_manip, ActionPlan_lang_manip, fix_json
 
@@ -24,12 +23,14 @@ class RemoteModel:
         model_type='remote',
         language_only=False,
         tp=1,
-        task_type=None # used to distinguish between manipulation and other environments
+        task_type=None, # used to distinguish between manipulation and other environments
+        schema_enabled_mask=None,
     ):
         self.model_name = model_name
         self.model_type = model_type
         self.language_only = language_only
         self.task_type = task_type
+        self.schema_enabled_mask = schema_enabled_mask
 
         if self.model_type == 'local':
             backend_config = PytorchEngineConfig(session_len=12000, dtype='float16', tp=tp)
@@ -106,23 +107,23 @@ class RemoteModel:
             else:
                 raise ValueError(f"Unsupported model name: {self.model_name}")
 
+    def _build_generation_schema(self):
+        return build_generation_schema(
+            enabled_mask=self.schema_enabled_mask,
+            is_manipulation=(self.task_type == "manip"),
+        )
+
+    def _get_json_schema_response_format(self):
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "embodied_planning",
+                "schema": self._build_generation_schema(),
+            },
+        }
+
     def _call_local(self, message_history: list):
-        if self.task_type == 'manip':
-            response_format = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "embodied_planning",
-                    "schema": llm_generation_guide_manip if self.language_only else vlm_generation_guide_manip
-                }
-            }
-        else:
-            response_format = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "embodied_planning",
-                    "schema": llm_generation_guide if self.language_only else vlm_generation_guide
-                }
-            }
+        response_format = self._get_json_schema_response_format()
         response = self.model(
             message_history,
             gen_config=GenerationConfig(
@@ -176,16 +177,7 @@ class RemoteModel:
 
     def _call_gpt(self, message_history: list):
 
-        if not self.language_only:
-            if self.task_type == 'manip':
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=vlm_generation_guide_manip))
-            else:
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=vlm_generation_guide))
-        else:
-            if self.task_type == 'manip':
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=llm_generation_guide_manip))
-            else:
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=llm_generation_guide))
+        response_format = self._get_json_schema_response_format()
 
         response = self.model.chat.completions.create(
             model=self.model_name,
@@ -203,16 +195,7 @@ class RemoteModel:
         if not self.language_only:
             message_history = convert_format_2gemini(message_history)
 
-        if not self.language_only:
-            if self.task_type == 'manip':
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=vlm_generation_guide_manip))
-            else:
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=vlm_generation_guide))
-        else:
-            if self.task_type == 'manip':
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=llm_generation_guide_manip))
-            else:
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=llm_generation_guide))
+        response_format = self._get_json_schema_response_format()
 
         response = self.model.chat.completions.create(
             model=self.model_name,
@@ -250,16 +233,7 @@ class RemoteModel:
         if not self.language_only:
             message_history = convert_format_2gemini(message_history)
 
-        if not self.language_only:
-            if self.task_type == 'manip':
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=vlm_generation_guide_manip))
-            else:
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=vlm_generation_guide))
-        else:
-            if self.task_type == 'manip':
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=llm_generation_guide_manip))
-            else:
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=llm_generation_guide))
+        response_format = self._get_json_schema_response_format()
 
         response = self.model.chat.completions.create(
             model=self.model_name,
@@ -276,16 +250,7 @@ class RemoteModel:
         if not self.language_only:
             message_history = convert_format_2gemini(message_history)
 
-        if not self.language_only:
-            if self.task_type == 'manip':
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=vlm_generation_guide_manip))
-            else:
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=vlm_generation_guide))
-        else:
-            if self.task_type == 'manip':
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=llm_generation_guide_manip))
-            else:
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=llm_generation_guide))
+        response_format = self._get_json_schema_response_format()
         
         response = self.model.chat.completions.create(
             model=self.model_name,
@@ -306,16 +271,7 @@ class RemoteModel:
         #     message_history = convert_format_2gemini(message_history)
 
         # no use, lmdeploy use support json schema only if it is pytorch-backended
-        if not self.language_only:
-            if self.task_type == 'manip':
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=vlm_generation_guide_manip))
-            else:
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=vlm_generation_guide))
-        else:
-            if self.task_type == 'manip':
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=llm_generation_guide_manip))
-            else:
-                response_format=dict(type='json_schema',  json_schema=dict(name='embodied_planning',schema=llm_generation_guide))
+        response_format = self._get_json_schema_response_format()
 
         response = self.model.chat.completions.create(
             model=self.model_name,

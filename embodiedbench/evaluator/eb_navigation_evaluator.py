@@ -14,9 +14,11 @@ from time import sleep
 from embodiedbench.evaluator.config.system_prompts import eb_navigation_system_prompt
 from embodiedbench.evaluator.config.eb_navigation_example import examples
 from embodiedbench.main import logger
+from embodiedbench.evaluator.wandb_utils import maybe_init_wandb, log_episode_metrics, log_summary_metrics, finish_wandb
 
 system_prompt = eb_navigation_system_prompt
 examples = examples
+
 
 class EB_NavigationEvaluator():
     def __init__(self, config):
@@ -28,6 +30,7 @@ class EB_NavigationEvaluator():
 
         self.env = None
         self.planner = None
+        self.wandb = None
 
     def save_episode_metric(self, episode_info):
         episode_idx = self.env._current_episode_num if not len(self.env.selected_indexes) else self.env.selected_indexes[self.env._current_episode_num - 1] + 1
@@ -44,7 +47,7 @@ class EB_NavigationEvaluator():
         self.eval_sets = list(valid_eval_sets)
         if type(self.eval_sets) == list and len(self.eval_sets) == 0:
             self.eval_sets = ValidEvalSets
-            
+
         for eval_set in self.eval_sets:
             if self.env is not None:
                 self.env.close()
@@ -52,24 +55,35 @@ class EB_NavigationEvaluator():
             logger.info(f'Current eval set: {eval_set}')
             exp_name = f"{self.model_name.split('/')[-1]}_{self.config['exp_name']}/{eval_set}" if len(self.config['exp_name']) else f"{self.model_name.split('/')[-1]}/{eval_set}"
 
-            self.env = EBNavigationEnv(eval_set=self.eval_set, down_sample_ratio=self.config['down_sample_ratio'], 
-                                   exp_name=exp_name, multiview=self.config['multiview'], boundingbox=self.config['detection_box'], 
-                                   multistep = self.config['multistep'], resolution = self.config['resolution'])
+            self.env = EBNavigationEnv(eval_set=self.eval_set, down_sample_ratio=self.config['down_sample_ratio'],
+                                       exp_name=exp_name, multiview=self.config['multiview'], boundingbox=self.config['detection_box'],
+                                       multistep=self.config['multistep'], resolution=self.config['resolution'])
 
-            self.planner = EBNavigationPlanner(model_name=self.model_name, model_type = self.config['model_type'], 
-                                           actions = self.env.language_skill_set, system_prompt = system_prompt, 
-                                           examples = examples, n_shot=self.config['n_shots'], obs_key='head_rgb', 
-                                           chat_history=self.config['chat_history'], language_only=self.config['language_only'], 
-                                           multiview=self.config['multiview'], multistep = self.config['multistep'], 
-                                           visual_icl = self.config['visual_icl'], truncate=self.config.get('truncate', False))
-            
-            self.evaluate()
-            average_json_values(os.path.join(self.env.log_path, 'results'), selected_key = None)
-            with open(os.path.join(self.env.log_path, 'config.txt'), 'w') as f:
-                f.write(str(self.config))
+            self.planner = EBNavigationPlanner(model_name=self.model_name, model_type=self.config['model_type'],
+                                               actions=self.env.language_skill_set, system_prompt=system_prompt,
+                                               examples=examples, n_shot=self.config['n_shots'], obs_key='head_rgb',
+                                               chat_history=self.config['chat_history'], language_only=self.config['language_only'],
+                                               multiview=self.config['multiview'], multistep=self.config['multistep'],
+                                               visual_icl=self.config['visual_icl'], truncate=self.config.get('truncate', False))
+
+            self.wandb = maybe_init_wandb(self.config, self.model_name, "eb_nav", self.eval_set)
+            try:
+                self.evaluate()
+                average_json_values(os.path.join(self.env.log_path, 'results'), selected_key=None)
+                with open(os.path.join(self.env.log_path, 'config.txt'), 'w') as f:
+                    f.write(str(self.config))
+                log_summary_metrics(self.wandb, os.path.join(self.env.log_path, 'results'))
+            finally:
+                finish_wandb(self.wandb)
+                self.wandb = None
 
     def evaluate(self):
         progress_bar = tqdm(total=self.env.number_of_episodes, desc="Episodes")
+        episodes_done = 0
+        success_count = 0
+        reward_sum = 0.0
+        planner_error_sum = 0.0
+
         while self.env._current_episode_num < self.env.number_of_episodes:
             logger.info(f"Evaluating episode {self.env._current_episode_num} ...")
             episode_info = {'reward': []}
@@ -85,11 +99,11 @@ class EB_NavigationEvaluator():
                     print(f"Planner Output Action: {action}")
                     reasoning = json.loads(reasoning)
                     if type(action) == list:
-                        for i, action_single in enumerate( action[:min(self.env._max_episode_steps - self.env._current_step + 1, len(action))] ):
-                            if i==0:
-                                obs, reward, done, info = self.env.step(action_single,reasoning,1)
+                        for i, action_single in enumerate(action[:min(self.env._max_episode_steps - self.env._current_step + 1, len(action))]):
+                            if i == 0:
+                                obs, reward, done, info = self.env.step(action_single, reasoning, 1)
                             else:
-                                obs, reward, done, info = self.env.step(action_single,reasoning,0)
+                                obs, reward, done, info = self.env.step(action_single, reasoning, 0)
                             print(f"Executed action: {action_single}, Task success: {info['task_success']}")
                             logger.debug(f"reward: {reward}")
                             logger.debug(f"terminate: {done}\n")
@@ -97,7 +111,7 @@ class EB_NavigationEvaluator():
                             img_path = self.env.save_image(obs)
                             episode_info['reward'].append(reward)
 
-                            if done==True:
+                            if done is True:
                                 break
 
                             if info['last_action_success'] == 0:
@@ -118,26 +132,36 @@ class EB_NavigationEvaluator():
                     print(e)
                     print("retrying...")
 
-
             # evaluation metrics
             episode_info['instruction'] = user_instruction
             episode_info['reward'] = np.mean(episode_info['reward'])
             episode_info['task_success'] = info['task_success']
-            # episode_info["task_progress"] = info['task_progress']
-            # episode_info['subgoal_reward'] = info['subgoal_reward']
             episode_info['num_steps'] = info["env_step"]
             episode_info['planner_steps'] = self.planner.planner_steps
             episode_info['planner_output_error'] = self.planner.output_json_error
-            # episode_info["num_invalid_actions"] = info["num_invalid_actions"]
-            # episode_info["num_invalid_action_ratio"] = info["num_invalid_actions"] / info["env_step"]
             episode_info["episode_elapsed_seconds"] = info["episode_elapsed_seconds"]
             self.save_episode_metric(episode_info)
+
+            episode_idx = self.env._current_episode_num if not len(self.env.selected_indexes) else self.env.selected_indexes[self.env._current_episode_num - 1] + 1
+            episodes_done += 1
+            success_count += int(episode_info['task_success'])
+            reward_sum += float(episode_info['reward'])
+            planner_error_sum += float(episode_info['planner_output_error'])
+            running_metrics = {
+                "episodes_done": episodes_done,
+                "success_count": success_count,
+                "success_rate_running": success_count / episodes_done,
+                "mean_reward_running": reward_sum / episodes_done,
+                "mean_planner_output_error_running": planner_error_sum / episodes_done,
+            }
+            log_episode_metrics(self.wandb, episode_idx, episode_info, running_metrics)
+
             progress_bar.update()
 
     def check_config_valid(self):
         if self.config['multiview'] + self.config['multistep'] + self.config['visual_icl'] + self.config['chat_history'] > 1:
             raise ValueError("Only one of multiview, multistep, visual_icl, chat_history can be enabled at a time.")
-        
+
         if self.config['language_only']:
             if self.config['multiview'] or self.config['multistep']:
                 logger.warning("Language only mode should not have multiview or multistep enabled. Setting these arguments to False ...")
@@ -146,30 +170,27 @@ class EB_NavigationEvaluator():
 
 
 if __name__ == '__main__':
-    
+
     config = {
-        'model_name': sys.argv[2],  #'gpt-4o-mini', claude-3-5-sonnet-20241022, sys.argv[2]
-        'down_sample_ratio': 1, # 0.000666,
+        'model_name': sys.argv[2],  # 'gpt-4o-mini', claude-3-5-sonnet-20241022, sys.argv[2]
+        'down_sample_ratio': 1,  # 0.000666,
         'model_type': 'remote',
         'language_only': False,
         'dataset': sys.argv[1],
-        'chat_history': True, 
+        'chat_history': True,
         'action_num_per_plan': 5,
         'fov': 100,
-        'n_shots' : int(sys.argv[4]),   # int(sys.argv[3])
-        'sleep_time':  0, #int(sys.argv[3]),
-        'multiview': 0, #sys.argv[3]=='1',
-        'boundingbox': 0, #sys.argv[4]=='1',
-        'target_only': 0, #sys.argv[5]=='1',
-        'multistep':0, #sys.argv[6]=='1',
-        'resolution': 500, #int(sys.argv[7]),
-        'purpose': "retest", #sys.argv[8],
+        'n_shots': int(sys.argv[4]),  # int(sys.argv[3])
+        'sleep_time': 0,  # int(sys.argv[3]),
+        'multiview': 0,  # sys.argv[3]=='1',
+        'boundingbox': 0,  # sys.argv[4]=='1',
+        'target_only': 0,  # sys.argv[5]=='1',
+        'multistep': 0,  # sys.argv[6]=='1',
+        'resolution': 500,  # int(sys.argv[7]),
+        'purpose': "retest",  # sys.argv[8],
         'exp_name': sys.argv[3],
-        'icl_abl':0, #sys.argv[10]=='1',
-        'visual':0 #sys.argv[11]=='1',
+        'icl_abl': 0,  # sys.argv[10]=='1',
+        'visual': 0  # sys.argv[11]=='1',
     }
     evaluator = EB_NavigationEvaluator(config)
     evaluator.evaluate_main()
-
-
-

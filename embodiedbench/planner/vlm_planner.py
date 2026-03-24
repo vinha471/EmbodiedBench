@@ -5,7 +5,6 @@ import time
 import numpy as np
 import cv2
 import json
-from embodiedbench.planner.planner_config.generation_guide import llm_generation_guide, vlm_generation_guide
 from embodiedbench.planner.planner_utils import local_image_to_data_url, template, template_lang, fix_json
 from embodiedbench.planner.remote_model import RemoteModel
 from embodiedbench.planner.custom_model import CustomModel
@@ -22,18 +21,19 @@ class VLMPlanner():
         self.chat_history = chat_history # whether to includ all the chat history for prompting
         self.set_actions(actions)
         self.model_type = model_type
+        self.kwargs = kwargs
+        self.action_key = kwargs.pop('action_key', 'action_id')
+        self.schema_enabled_mask = kwargs.pop('schema_enabled_mask', kwargs.pop('enabled_mask', None))
         if model_type == 'custom':
             self.model = CustomModel(model_name, language_only)
         else:
-            self.model = RemoteModel(model_name, model_type, language_only, tp=tp)
+            self.model = RemoteModel(model_name, model_type, language_only, tp=tp, schema_enabled_mask=self.schema_enabled_mask)
 
         self.use_feedback = use_feedback
         self.multistep = multistep
         self.planner_steps = 0
         self.output_json_error = 0
         self.language_only = language_only
-        self.kwargs = kwargs
-        self.action_key = kwargs.pop('action_key', 'action_id')
     
     def set_actions(self, actions):
         self.actions = actions
