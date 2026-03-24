@@ -1,5 +1,4 @@
-ARG CUDA_VERSION
-ARG NVIDIA_VERSION
+ARG CUDA_VERSION=12.8.1
 
 FROM nvidia/cuda:$CUDA_VERSION-devel-ubuntu22.04
 
@@ -41,16 +40,15 @@ ENV PATH=${CONDA_DIR}/bin:$PATH
 # syntax=docker/dockerfile:1.2
 ARG GITHUB_USERNAME=vinha471
 RUN --mount=type=secret,id=github_token \
-    git clone https://${GITHUB_USERNAME}:$(cat /run/secrets/github_token)@github.com/EmbodiedBench/EmbodiedBench.git /opt/embodiedbench
+    git clone https://${GITHUB_USERNAME}:$(cat /run/secrets/github_token)@github.com/vinha471/EmbodiedBench.git /opt/embodiedbench
 
 
 WORKDIR /opt/embodiedbench
 
-
-COPY scripts/install_nvidia.sh /app/
-RUN NVIDIA_VERSION=$NVIDIA_VERSION /app/install_nvidia.sh
-
 ############################ 1. Setup Env for EB-Alf and EB-Hab ############################
+
+RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
+    conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 
 RUN conda env create -f conda_envs/environment.yaml && conda clean --all -y
 
@@ -99,7 +97,6 @@ RUN bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate embench_
              wget https://downloads.coppeliarobotics.com/V4_1_0/CoppeliaSim_Pro_V4_1_0_Ubuntu20_04.tar.xz && \
              tar -xf CoppeliaSim_Pro_V4_1_0_Ubuntu20_04.tar.xz && \
              rm CoppeliaSim_Pro_V4_1_0_Ubuntu20_04.tar.xz && \
-             mkdir -p /opt/CoppeliaSim && \
              mv CoppeliaSim_Pro_V4_1_0_Ubuntu20_04 /opt/CoppeliaSim"
 
 # 2. set CoppeliaSim related env variable
@@ -126,6 +123,13 @@ RUN bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate embench_
 RUN bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate embench_man && \
              cd embodiedbench/envs/eb_manipulation && \
              cp simAddOnScript_PyRep.lua \$COPPELIASIM_ROOT"
+
+
+############################ Setup Deploy Env (lmdeploy + vllm) ############################
+
+RUN conda create -n deploy -y python=3.10 && conda clean --all -y
+
+RUN conda run -n deploy pip install --no-cache-dir lmdeploy vllm
 
 
 CMD ["/bin/bash"]
